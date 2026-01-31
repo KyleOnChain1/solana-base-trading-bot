@@ -1,0 +1,46 @@
+{
+  "name": "solana-base-trading-bot",
+  "version": "1.0.0",
+  "description": "A Telegram trading bot for Solana and Base networks using Jupiter and 1inch/LlamaSwap aggregators",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "dev:watch": "nodemon --exec ts-node src/index.ts",
+    "lint": "eslint src/**/*.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "telegram",
+    "trading",
+    "bot",
+    "solana",
+    "base",
+    "jupiter",
+    "defi"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@solana/spl-token": "^0.4.9",
+    "@solana/web3.js": "^1.98.0",
+    "axios": "^1.7.7",
+    "better-sqlite3": "^11.6.0",
+    "bs58": "^6.0.0",
+    "cross-fetch": "^4.0.0",
+    "dotenv": "^16.4.5",
+    "telegraf": "^4.16.3",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.9.0",
+    "nodemon": "^3.1.7",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
