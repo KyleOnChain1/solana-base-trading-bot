@@ -83,6 +83,7 @@ export interface SwapQuote {
 export interface TransactionResult {
   success: boolean;
   signature?: string;
+  message?: string;
   hash?: string;
   error?: string;
   explorerUrl?: string;
@@ -178,11 +179,29 @@ export interface JupiterSwapResponse {
   prioritizationFeeLamports?: number;
 }
 
+// Pending withdraw state
+export interface PendingWithdraw {
+  network: Network;
+  tokenAddress?: string; // undefined = native (SOL/ETH)
+  tokenSymbol?: string;
+  tokenDecimals?: number;
+  toAddress?: string;
+  amount?: string; // "all" or a number
+  stage: 'select_token' | 'enter_address' | 'enter_amount' | 'confirm';
+}
+
 // User state for conversation flow
 export interface UserState {
-  currentAction?: 'buying' | 'selling' | 'settings';
+  // Security flows
+  securitySetup?: { stage: string; tempPassword?: string; attempts: number };
+  pendingUnlock?: boolean;
+  changingPassword?: { stage: string; currentPassword?: string; newPassword?: string };
+  settingPhishing?: boolean;
+  settingLimits?: boolean;
+  currentAction?: 'buying' | 'selling' | 'settings' | 'withdrawing';
   pendingTrade?: PendingTrade;
   selectedNetwork?: Network;
+  pendingWithdraw?: PendingWithdraw;
 }
 
 // Callback data structure

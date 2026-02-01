@@ -1,3 +1,4 @@
+import { initSecurityTables } from './security-database';
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
@@ -63,6 +64,9 @@ export function initDatabase(): void {
     CREATE INDEX IF NOT EXISTS idx_settings_user ON trade_settings(telegram_user_id);
     CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(telegram_user_id);
   `);
+  
+  // Initialize security tables
+  initSecurityTables(db);
 }
 
 // ============ Wallet Operations ============
@@ -242,4 +246,15 @@ export function closeDatabase(): void {
   if (db) {
     db.close();
   }
+}
+
+/**
+ * Get unique tracked token addresses for a user on a specific network
+ */
+export function getTrackedTokens(telegramUserId: number, network: string): string[] {
+  const rows = db.prepare(`
+    SELECT DISTINCT token_address FROM transactions
+    WHERE telegram_user_id = ? AND network = ?
+  `).all(telegramUserId, network) as any[];
+  return rows.map(r => r.token_address);
 }

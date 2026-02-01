@@ -1,4 +1,4 @@
-import { Context, Telegraf } from 'telegraf';
+import { Context, Telegraf, Markup } from 'telegraf';
 import { Message } from 'telegraf/types';
 import { Network, TokenInfo, UserState } from '../types';
 import { config } from '../config';
@@ -8,6 +8,7 @@ import * as base from '../services/base';
 import * as dexscreener from '../services/dexscreener';
 import * as keyboards from '../utils/keyboards';
 import * as formatters from '../utils/formatters';
+import { handleSecurityTextInput } from './security-handlers';
 
 // User states for conversation flow
 const userStates = new Map<number, UserState>();
@@ -210,9 +211,30 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
   // Check if user is in a specific input state
   const state = getUserState(userId);
   
+  
+  // Handle security flows first
+  if (await handleSecurityTextInput(ctx, text)) return;
+  // Handle withdraw flow text input
+  if (state.currentAction === 'withdrawing' && state.pendingWithdraw) {
+    await handleWithdrawTextInput(ctx, text);
+    return;
+  }
+
   if (state.currentAction === 'buying' && state.pendingTrade?.stage === 'select_amount') {
     // Handle custom amount input
     await handleCustomBuyAmount(ctx, text);
+    return;
+  }
+
+  // Handle withdraw address input
+  if (state.currentAction === 'withdrawing' && state.pendingWithdraw?.stage === 'enter_address') {
+    await handleWithdrawAddressInput(ctx, text);
+    return;
+  }
+
+  // Handle withdraw amount input
+  if (state.currentAction === 'withdrawing' && state.pendingWithdraw?.stage === 'enter_amount') {
+    await handleWithdrawAmountInput(ctx, text);
     return;
   }
   
@@ -242,6 +264,92 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
 /**
  * Handle token address input
  */
+/**
+ * Handle text input during withdraw flow (address and amount)
+ */
+async function handleWithdrawTextInput(ctx: Context, text: string): Promise<void> {
+  const userId = ctx.from!.id;
+  const state = getUserState(userId);
+  const pw = state.pendingWithdraw!;
+
+  if (pw.stage === 'enter_address') {
+    // Validate address format
+    if (pw.network === 'solana') {
+      // Solana addresses are base58, 32-44 chars
+      if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(text)) {
+        await ctx.reply('❌ Invalid Solana address. Please paste a valid address:');
+        return;
+      }
+    } else {
+      // Base/ETH addresses start with 0x, 42 chars
+      if (!/^0x[0-9a-fA-F]{40}$/.test(text)) {
+        await ctx.reply('❌ Invalid Base/ETH address. Please paste a valid address:');
+        return;
+      }
+    }
+
+    // Save address and ask for amount
+    setUserState(userId, {
+      currentAction: 'withdrawing',
+      pendingWithdraw: { ...pw, toAddress: text, stage: 'enter_amount' },
+    });
+
+    const nativeName = pw.network === 'solana' ? 'SOL' : 'ETH';
+    const isNative = pw.tokenAddress === 'native';
+
+    await ctx.reply(
+      `✅ Destination: \`${text}\`\n\n` +
+      `Enter the amount of ${pw.tokenSymbol || 'tokens'} to withdraw` +
+      (isNative ? ` (or type "all" to withdraw max minus gas reserve):` : ` (or type "all" for full balance):`),
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('���� Withdraw All', 'wwa')],
+          [Markup.button.callback('��❌ Cancel', 'wwx')],
+        ])
+      }
+    );
+    return;
+  }
+
+  if (pw.stage === 'enter_amount') {
+    // Validate amount
+    const isAll = text.toLowerCase() === 'all';
+    if (!isAll && (isNaN(parseFloat(text)) || parseFloat(text) <= 0)) {
+      await ctx.reply('❌ Invalid amount. Please enter a positive number or "all":');
+      return;
+    }
+
+    const amount = isAll ? 'all' : text;
+    const gasNote = pw.tokenAddress === 'native'
+      ? `\n⚠️ Gas reserve will be kept automatically.`
+      : '';
+
+    // Save amount and show confirmation
+    setUserState(userId, {
+      currentAction: 'withdrawing',
+      pendingWithdraw: { ...pw, amount, stage: 'confirm' },
+    });
+
+    await ctx.reply(
+      `���� *Confirm Withdrawal*\n\n` +
+      `Token: *${pw.tokenSymbol}*\n` +
+      `Amount: *${amount}*\n` +
+      `To: \`${pw.toAddress}\`\n` +
+      `Network: *${pw.network === 'solana' ? 'Solana' : 'Base'}*` +
+      gasNote,
+      {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('��✅ Confirm', 'wwc')],
+          [Markup.button.callback('❌ Cancel', 'wwx')],
+        ])
+      }
+    );
+    return;
+  }
+}
+
 async function handleTokenAddressInput(
   ctx: Context, 
   address: string, 
@@ -513,4 +621,92 @@ export async function executeSell(
   }
   
   clearUserState(userId);
+}
+
+
+async function handleWithdrawAddressInput(ctx: Context, address: string): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  const state = getUserState(userId);
+  const pw = state.pendingWithdraw;
+  if (!pw) return;
+
+  const isValidSolana = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address);
+  const isValidEvm = /^0x[a-fA-F0-9]{40}$/.test(address);
+
+  if (pw.network === 'solana' && !isValidSolana) {
+    await ctx.reply('Invalid Solana address. Please enter a valid Solana wallet address:');
+    return;
+  }
+  if (pw.network === 'base' && !isValidEvm) {
+    await ctx.reply('Invalid Base address. Please enter a valid 0x address:');
+    return;
+  }
+
+  setUserState(userId, {
+    currentAction: 'withdrawing',
+    pendingWithdraw: { ...pw, toAddress: address, stage: 'enter_amount' },
+  });
+
+  let balanceStr = '';
+  try {
+    const wallet = db.getWallet(userId, pw.network);
+    if (wallet) {
+      if (!pw.tokenAddress) {
+        if (pw.network === 'solana') {
+          const bal = await solana.getSolBalance(wallet.address);
+          balanceStr = '\nAvailable: ' + bal.sol.toFixed(4) + ' SOL';
+        } else {
+          const bal = await base.getEthBalance(wallet.address);
+          balanceStr = '\nAvailable: ' + parseFloat(bal.eth).toFixed(6) + ' ETH';
+        }
+      } else if (pw.network === 'base') {
+        const info = await base.getTokenBalance(pw.tokenAddress, wallet.address);
+        balanceStr = '\nAvailable: ' + Number(info.balance).toFixed(4) + ' ' + pw.tokenSymbol;
+      }
+    }
+  } catch {}
+
+  await ctx.reply(
+    '\ud83d\udcb8 *Withdraw ' + pw.tokenSymbol + '*\n\nTo: `' + address + '`' + balanceStr + '\n\nEnter the amount to withdraw (or type `all` for max):',
+    { parse_mode: 'Markdown' }
+  );
+}
+
+async function handleWithdrawAmountInput(ctx: Context, amountText: string): Promise<void> {
+  const userId = ctx.from?.id;
+  if (!userId) return;
+  const state = getUserState(userId);
+  const pw = state.pendingWithdraw;
+  if (!pw || !pw.toAddress) return;
+
+  const isAll = amountText.toLowerCase() === 'all';
+  if (!isAll) {
+    const num = parseFloat(amountText);
+    if (isNaN(num) || num <= 0) {
+      await ctx.reply('Invalid amount. Enter a positive number or type `all`:', { parse_mode: 'Markdown' });
+      return;
+    }
+  }
+
+  const amount = isAll ? 'all' : amountText;
+  setUserState(userId, {
+    currentAction: 'withdrawing',
+    pendingWithdraw: { ...pw, amount, stage: 'confirm' },
+  });
+
+  const nativeNote = !pw.tokenAddress ? '\n_\u26a0\ufe0f A small gas reserve will be kept in the wallet._' : '';
+  const displayAmount = isAll ? 'ALL' : amountText;
+  const netLabel = pw.network === 'solana' ? 'Solana' : 'Base';
+
+  await ctx.reply(
+    '\ud83d\udcb8 *Confirm Withdrawal*\n\nToken: *' + pw.tokenSymbol + '*\nAmount: *' + displayAmount + '*\nTo: `' + pw.toAddress + '`\nNetwork: *' + netLabel + '*' + nativeNote + '\n\nProceed?',
+    {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('\u2705 Confirm Withdraw', 'wdc')],
+        [Markup.button.callback('\u274c Cancel', 'wdx')],
+      ])
+    }
+  );
 }

@@ -27,7 +27,7 @@ export const config = {
   databasePath: process.env.DATABASE_PATH || './data/bot.db',
   
   // API endpoints
-  jupiterApiUrl: 'https://quote-api.jup.ag/v6',
+  jupiterApiUrl: 'https://lite-api.jup.ag/swap/v1',
   dexScreenerApiUrl: 'https://api.dexscreener.com',
   llamaSwapApiUrl: 'https://swap.defillama.com',
   oneInchApiUrl: 'https://api.1inch.dev/swap/v6.1/8453', // Base chain ID

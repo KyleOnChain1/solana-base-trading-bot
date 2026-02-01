@@ -14,6 +14,8 @@ import {
   handleTextMessage,
 } from './handlers/commands';
 import { handleCallback } from './handlers/callbacks';
+import { handleSecurity, handleUnlock, handleLock } from './handlers/security-handlers';
+import { startSessionCleanup, stopSessionCleanup } from './services/session-manager';
 
 // Validate configuration
 try {
@@ -26,6 +28,9 @@ try {
 // Initialize database
 console.log('Initializing database...');
 initDatabase();
+
+// Start session cleanup
+startSessionCleanup();
 
 // Create bot instance
 const bot = new Telegraf(config.telegramBotToken);
@@ -46,6 +51,11 @@ bot.command('sell', handleSell);
 bot.command('settings', handleSettings);
 bot.command('history', handleHistory);
 
+// Security commands
+bot.command('security', handleSecurity);
+bot.command('unlock', handleUnlock);
+bot.command('lock', handleLock);
+
 // Callback query handler (inline button presses)
 bot.on('callback_query', handleCallback);
 
@@ -57,6 +67,7 @@ const shutdown = async (signal: string) => {
   console.log(`\n${signal} received. Shutting down gracefully...`);
   
   bot.stop(signal);
+  stopSessionCleanup();
   closeDatabase();
   
   process.exit(0);
