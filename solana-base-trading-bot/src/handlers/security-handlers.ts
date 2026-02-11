@@ -270,13 +270,27 @@ async function handleUnlockInput(ctx: Context, password: string): Promise<void> 
   // Delete password message
   try { await ctx.deleteMessage(); } catch {}
 
+  // Check if there's a pending buy to resume after unlock
+  const state = getUserState(userId);
+  const pendingBuy = state.pendingBuyAfterUnlock;
+
   const result = security.unlock(userId, password);
   clearUserState(userId);
 
   if (result.success) {
     const remaining = security.getSessionTimeRemaining(userId);
-    await ctx.reply(`🔓 Wallet unlocked! (${remaining}m session)`);
+    if (pendingBuy) {
+      await ctx.reply(`🔓 Unlocked (${remaining}m session). Executing buy...`);
+      const { executeBuy } = await import('./commands');
+      await executeBuy(ctx, pendingBuy.network, pendingBuy.tokenAddress, pendingBuy.amount);
+    } else {
+      await ctx.reply(`🔓 Wallet unlocked! (${remaining}m session)`);
+    }
   } else {
+    if (pendingBuy) {
+      // Keep the pending buy for retry
+      setUserState(userId, { pendingUnlock: true, pendingBuyAfterUnlock: pendingBuy });
+    }
     await ctx.reply(`❌ ${result.error}`);
   }
 }

@@ -1,0 +1,283 @@
+import { Markup } from 'telegraf';
+import { InlineKeyboardButton } from 'telegraf/types';
+import { Network, TokenInfo, TokenHolding } from '../types';
+
+// Token address shortener - maps short IDs to full addresses
+const tokenMap = new Map<string, string>();
+const reverseMap = new Map<string, string>();
+let tokenCounter = 0;
+
+export function shortenToken(address: string): string {
+  const existing = reverseMap.get(address.toLowerCase());
+  if (existing) return existing;
+  
+  const id = 't' + (++tokenCounter).toString(36);
+  tokenMap.set(id, address);
+  reverseMap.set(address.toLowerCase(), id);
+  return id;
+}
+
+export function expandToken(id: string): string | undefined {
+  return tokenMap.get(id);
+}
+
+export function getMainMenuKeyboard() {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('💰 Wallet', 'w'),
+      Markup.button.callback('📊 Holdings', 'h'),
+    ],
+    [
+      Markup.button.callback('🛒 Buy Token', 'b'),
+      Markup.button.callback('💸 Sell Token', 's'),
+    ],
+    [
+      Markup.button.callback('⚙️ Settings', 'st'),
+      Markup.button.callback('📜 History', 'hi'),
+    ],
+    [
+      Markup.button.callback('ℹ️ Help', 'hp'),
+    ],
+  ]);
+}
+
+export function getNetworkSelectionKeyboard(action: string) {
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('☀️ Solana', `${action}:sol`),
+      Markup.button.callback('🔵 Base', `${action}:base`),
+    ],
+    [
+      Markup.button.callback('« Back', 'm'),
+    ],
+  ]);
+}
+
+export function getWalletMenuKeyboard(network: Network) {
+  const n = network === 'solana' ? 'sol' : 'base';
+  const emoji = network === 'solana' ? '☀️' : '🔵';
+  
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback(`${emoji} View Balance`, `wb:${n}`),
+    ],
+    [
+      Markup.button.callback('📤 Export Key', `we:${n}`),
+      Markup.button.callback('📥 Import', `wi:${n}`),
+    ],
+    [
+      Markup.button.callback('🔄 Switch Network', 'w'),
+      Markup.button.callback('« Back', 'm'),
+    ],
+  ]);
+}
+
+export function getTokenConfirmKeyboard(network: Network, tokenAddress: string) {
+  const n = network === 'solana' ? 'sol' : 'base';
+  const t = shortenToken(tokenAddress);
+  
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('✅ Yes, Buy This', `bc:${n}:${t}`),
+    ],
+    [
+      Markup.button.callback('❌ Cancel', 'm'),
+    ],
+  ]);
+}
+
+export function getBuyAmountKeyboard(network: Network, tokenAddress: string) {
+  const n = network === 'solana' ? 'sol' : 'base';
+  const t = shortenToken(tokenAddress);
+  const sym = network === 'solana' ? 'SOL' : 'ETH';
+  
+  const amounts = network === 'solana' 
+    ? ['0.1', '0.5', '1', '2', '5']
+    : ['0.01', '0.05', '0.1', '0.25', '0.5'];
+  
+  return Markup.inlineKeyboard([
+    amounts.slice(0, 3).map(amt => 
+      Markup.button.callback(`${amt} ${sym}`, `ba:${n}:${t}:${amt}`)
+    ),
+    amounts.slice(3).map(amt => 
+      Markup.button.callback(`${amt} ${sym}`, `ba:${n}:${t}:${amt}`)
+    ),
+    [
+      Markup.button.callback('25%', `bp:${n}:${t}:25`),
+      Markup.button.callback('50%', `bp:${n}:${t}:50`),
+      Markup.button.callback('100%', `bp:${n}:${t}:100`),
+    ],
+    [
+      Markup.button.callback('✏️ Custom', `bx:${n}:${t}`),
+    ],
+    [
+      Markup.button.callback('« Back', 'b'),
+      Markup.button.callback('❌ Cancel', 'm'),
+    ],
+  ]);
+}
+
+export function getSellAmountKeyboard(network: Network, tokenAddress: string, symbol: string) {
+  const n = network === 'solana' ? 'sol' : 'base';
+  const t = shortenToken(tokenAddress);
+  
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('25%', `sp:${n}:${t}:25`),
+      Markup.button.callback('50%', `sp:${n}:${t}:50`),
+    ],
+    [
+      Markup.button.callback('75%', `sp:${n}:${t}:75`),
+      Markup.button.callback('100%', `sp:${n}:${t}:100`),
+    ],
+    [
+      Markup.button.callback('✏️ Custom', `sx:${n}:${t}`),
+    ],
+    [
+      Markup.button.callback('« Back', 'h'),
+      Markup.button.callback('❌ Cancel', 'm'),
+    ],
+  ]);
+}
+
+export function getHoldingsKeyboard(holdings: TokenHolding[], network: Network, page: number = 0) {
+  const n = network === 'solana' ? 'sol' : 'base';
+  const pageSize = 5;
+  const start = page * pageSize;
+  const end = start + pageSize;
+  const pageHoldings = holdings.slice(start, end);
+  
+  const buttons: InlineKeyboardButton[][] = pageHoldings.map(holding => {
+    const t = shortenToken(holding.tokenAddress);
+    return [
+      Markup.button.callback(
+        `${holding.symbol} - $${holding.valueUsd}`,
+        `hv:${n}:${t}`
+      ),
+    ];
+  });
+  
+  const navButtons: InlineKeyboardButton[] = [];
+  if (page > 0) {
+    navButtons.push(Markup.button.callback('« Prev', `hp:${n}:${page - 1}`));
+  }
+  if (end < holdings.length) {
+    navButtons.push(Markup.button.callback('Next »', `hp:${n}:${page + 1}`));
+  }
+  
+  if (navButtons.length > 0) {
+    buttons.push(navButtons);
+  }
+  
+  buttons.push([
+    Markup.button.callback('🔄 Refresh', `hr:${n}`),
+    Markup.button.callback('« Back', 'm'),
+  ]);
+  
+  return Markup.inlineKeyboard(buttons);
+}
+
+export function getHoldingDetailKeyboard(holding: TokenHolding) {
+  const n = holding.network === 'solana' ? 'sol' : 'base';
+  const t = shortenToken(holding.tokenAddress);
+  
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('💸 Sell', `ss:${n}:${t}`),
+    ],
+    [
+      Markup.button.callback('📊 DexScreener', `dx:${n}:${t}`),
+    ],
+    [
+      Markup.button.callback('« Back', `h:${n}`),
+    ],
+  ]);
+}
+
+export function getSettingsKeyboard(network: Network) {
+  const n = network === 'solana' ? 'sol' : 'base';
+  
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('📊 Slippage', `sl:${n}`),
+    ],
+    [
+      Markup.button.callback('💰 Default Buy', `db:${n}`),
+    ],
+    [
+      Markup.button.callback('⚡ Priority Fee', `pf:sol`),
+    ],
+    [
+      Markup.button.callback('🔄 Switch Network', 'sn'),
+      Markup.button.callback('« Back', 'm'),
+    ],
+  ]);
+}
+
+export function getSlippageKeyboard(network: Network) {
+  const n = network === 'solana' ? 'sol' : 'base';
+  
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('0.5%', `sls:${n}:50`),
+      Markup.button.callback('1%', `sls:${n}:100`),
+      Markup.button.callback('2%', `sls:${n}:200`),
+    ],
+    [
+      Markup.button.callback('3%', `sls:${n}:300`),
+      Markup.button.callback('5%', `sls:${n}:500`),
+      Markup.button.callback('10%', `sls:${n}:1000`),
+    ],
+    [
+      Markup.button.callback('✏️ Custom', `slc:${n}`),
+    ],
+    [
+      Markup.button.callback('« Back', `st:${n}`),
+    ],
+  ]);
+}
+
+export function getConfirmationKeyboard(action: string, ...params: string[]) {
+  const paramStr = params.join(':');
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('✅ Confirm', `cf:${action}:${paramStr}`),
+      Markup.button.callback('❌ Cancel', 'm'),
+    ],
+  ]);
+}
+
+export function getTransactionResultKeyboard(explorerUrl?: string, network?: Network) {
+  const buttons: InlineKeyboardButton[][] = [];
+  
+  if (explorerUrl) {
+    buttons.push([
+      Markup.button.url('🔍 View Transaction', explorerUrl),
+    ]);
+  }
+  
+  buttons.push([
+    Markup.button.callback('📊 Holdings', 'h'),
+    Markup.button.callback('🏠 Main Menu', 'm'),
+  ]);
+  
+  return Markup.inlineKeyboard(buttons);
+}
+
+export function getQuickTradeKeyboard(network: Network, tokenAddress: string) {
+  const n = network === 'solana' ? 'sol' : 'base';
+  const t = shortenToken(tokenAddress);
+  
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback('🛒 Buy', `bc:${n}:${t}`),
+      Markup.button.callback('💸 Sell', `ss:${n}:${t}`),
+    ],
+    [
+      Markup.button.callback('🔄 Refresh', `tr:${n}:${t}`),
+    ],
+    [
+      Markup.button.callback('« Back', 'm'),
+    ],
+  ]);
+}

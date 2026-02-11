@@ -1,7 +1,9 @@
 import { Context, Markup } from 'telegraf';
 import { handleSecurityCallback, handleSecurity } from './security-handlers';
+import { handleLimitCallback, handleLimitTextInput } from './limit-order-handlers';
 import { Network } from '../types';
 import { config } from '../config';
+import { logger } from '../utils/logger';
 import * as db from '../services/database';
 import * as solana from '../services/solana';
 import * as base from '../services/base';
@@ -32,6 +34,8 @@ export async function handleCallback(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
 
+  logger.info(`[CALLBACK] user=${userId} action="${data}"`);
+
   const parts = data.split(':');
   const action = parts[0];
 
@@ -52,6 +56,23 @@ export async function handleCallback(ctx: Context): Promise<void> {
           await handleSecurityCallback(ctx, parts[1]);
         }
         break;
+      
+      // ‚îÄ‚îÄ Limit Orders ‚îÄ‚îÄ
+      case 'limit':
+      case 'limit_new_buy':
+      case 'limit_new_sell':
+      case 'limit_view_active':
+      case 'limit_history':
+      case 'limit_menu':
+      case 'limit_confirm':
+      case 'limit_cancel':
+      case 'limit_cancel_all':
+        if (await handleLimitCallback(ctx, data)) {
+          await ctx.answerCbQuery();
+          return;
+        }
+        break;
+      
       case 'hi':
         await showHistory(ctx);
         break;
@@ -121,7 +142,7 @@ export async function handleCallback(ctx: Context): Promise<void> {
             pendingWithdraw: { ...pw, amount: 'all', stage: 'confirm' },
           });
           await ctx.editMessageText(
-            `Ì†ΩÌ *Confirm Withdrawal*\n\n` +
+            `ÔøΩÔøΩÔøΩÔøΩ *Confirm Withdrawal*\n\n` +
             `Token: *${pw.tokenSymbol}*\n` +
             `Amount: *all*\n` +
             `To: \`${pw.toAddress}\`\n` +
@@ -130,7 +151,7 @@ export async function handleCallback(ctx: Context): Promise<void> {
             {
               parse_mode: 'Markdown',
               ...Markup.inlineKeyboard([
-                [Markup.button.callback('≥ã‚úÖ Confirm', 'wwc')],
+                [Markup.button.callback('ÔøΩÔøΩ‚úÖ Confirm', 'wwc')],
                 [Markup.button.callback('‚ùå Cancel', 'wwx')],
               ])
             }
@@ -253,6 +274,13 @@ export async function handleCallback(ctx: Context): Promise<void> {
         break;
 
       default:
+        // Check for limit order callbacks with dynamic parts
+        if (data.startsWith('limit_')) {
+          if (await handleLimitCallback(ctx, data)) {
+            await ctx.answerCbQuery();
+            return;
+          }
+        }
         await ctx.answerCbQuery('Unknown action');
     }
   } catch (error) {
@@ -827,16 +855,16 @@ async function handleLegacyMenu(ctx: Context, parts: string[]): Promise<void> {
 async function showWithdrawOptions(ctx: Context, network: Network): Promise<void> {
   const ns = network === 'solana' ? 'sol' : 'bas';
   const nativeName = network === 'solana' ? 'SOL' : 'ETH';
-  const emoji = network === 'solana' ? '‚òÄÔ∏è' : 'Ì†ΩÌ';
+  const emoji = network === 'solana' ? '‚òÄÔ∏è' : 'ÔøΩÔøΩÔøΩÔøΩ';
 
   await ctx.editMessageText(
-    `¥µÌ†ΩÌ *${emoji} ${network === 'solana' ? 'Solana' : 'Base'} Withdraw*\n\nWhat would you like to withdraw?`,
+    `ÔøΩÔøΩÔøΩÔøΩÔøΩÔøΩ *${emoji} ${network === 'solana' ? 'Solana' : 'Base'} Withdraw*\n\nWhat would you like to withdraw?`,
     {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([
         [Markup.button.callback(`${emoji} Withdraw ${nativeName}`, `wwn:${ns}`)],
-        [Markup.button.callback('≤∏Ì†æÌ Withdraw Token', `wwt:${ns}`)],
-        [Markup.button.callback('∫ô Back', `wn:${ns}`)],
+        [Markup.button.callback('ÔøΩÔøΩÔøΩÔøΩÔøΩÔøΩ Withdraw Token', `wwt:${ns}`)],
+        [Markup.button.callback('ÔøΩÔøΩ Back', `wn:${ns}`)],
       ])
     }
   );
@@ -858,8 +886,8 @@ async function startWithdrawNative(ctx: Context, network: Network): Promise<void
   });
 
   await ctx.editMessageText(
-    `¬´Ì†ΩÌ *Withdraw ${nativeName}*\n\n` +
-    `≤∏‚ö†Ô∏è A reserve of ${gasReserve} ${nativeName} will be kept for gas fees.\n\n` +
+    `¬´ÔøΩÔøΩÔøΩÔøΩ *Withdraw ${nativeName}*\n\n` +
+    `ÔøΩÔøΩ‚ö†Ô∏è A reserve of ${gasReserve} ${nativeName} will be kept for gas fees.\n\n` +
     `Please paste the destination wallet address:`,
     {
       parse_mode: 'Markdown',
@@ -920,7 +948,7 @@ async function showWithdrawTokenList(ctx: Context, network: Network): Promise<vo
     buttons.push([Markup.button.callback('¬´ Back', `ww:${ns}`)]);
 
     await ctx.editMessageText(
-      'Ì†æÌ *Select a token to withdraw:*',
+      'ÔøΩÔøΩÔøΩÔøΩ *Select a token to withdraw:*',
       {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard(buttons)
@@ -929,7 +957,7 @@ async function showWithdrawTokenList(ctx: Context, network: Network): Promise<vo
   } catch (err) {
     console.error('Error loading token list for withdraw:', err);
     await ctx.editMessageText(
-      '∫ô‚ùå Error loading token holdings. Please try again.',
+      'ÔøΩÔøΩ‚ùå Error loading token holdings. Please try again.',
       { ...Markup.inlineKeyboard([[Markup.button.callback('¬´ Back', `ww:${ns}`)]]) }
     );
   }
@@ -976,11 +1004,11 @@ async function startWithdrawToken(ctx: Context, network: Network, tokenAddress: 
   });
 
   await ctx.editMessageText(
-    `Ì†ΩÌ *Withdraw ${symbol}*\n\nPlease paste the destination wallet address:`,
+    `ÔøΩÔøΩÔøΩÔøΩ *Withdraw ${symbol}*\n\nPlease paste the destination wallet address:`,
     {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([
-        [Markup.button.callback('≤∏‚ùå Cancel', 'wwx')],
+        [Markup.button.callback('ÔøΩÔøΩ‚ùå Cancel', 'wwx')],
       ])
     }
   );

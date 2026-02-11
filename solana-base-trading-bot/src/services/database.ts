@@ -1,4 +1,5 @@
 import { initSecurityTables } from './security-database';
+import { initTriggerOrdersTable } from './trigger-orders-db';
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
@@ -67,6 +68,9 @@ export function initDatabase(): void {
   
   // Initialize security tables
   initSecurityTables(db);
+  
+  // Initialize trigger orders tables
+  initTriggerOrdersTable(db);
 }
 
 // ============ Wallet Operations ============

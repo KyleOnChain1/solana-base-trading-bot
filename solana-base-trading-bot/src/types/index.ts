@@ -198,10 +198,13 @@ export interface UserState {
   changingPassword?: { stage: string; currentPassword?: string; newPassword?: string };
   settingPhishing?: boolean;
   settingLimits?: boolean;
-  currentAction?: 'buying' | 'selling' | 'settings' | 'withdrawing';
+  currentAction?: 'buying' | 'selling' | 'settings' | 'withdrawing' | 'limit_order';
   pendingTrade?: PendingTrade;
   selectedNetwork?: Network;
   pendingWithdraw?: PendingWithdraw;
+  pendingTriggerOrder?: import('./trigger-orders').PendingTriggerOrder;
+  // Auto-unlock: pending buy that triggered a password prompt
+  pendingBuyAfterUnlock?: { network: Network; tokenAddress: string; amount: number };
 }
 
 // Callback data structure

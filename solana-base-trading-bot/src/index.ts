@@ -15,7 +15,9 @@ import {
 } from './handlers/commands';
 import { handleCallback } from './handlers/callbacks';
 import { handleSecurity, handleUnlock, handleLock } from './handlers/security-handlers';
+import { handleLimit, handleOrders } from './handlers/limit-order-handlers';
 import { startSessionCleanup, stopSessionCleanup } from './services/session-manager';
+import { initTriggerOrderService, startMonitoring, stopMonitoring } from './services/trigger-orders';
 
 // Validate configuration
 try {
@@ -34,6 +36,9 @@ startSessionCleanup();
 
 // Create bot instance
 const bot = new Telegraf(config.telegramBotToken);
+
+// Initialize trigger order service
+initTriggerOrderService(bot);
 
 // Error handling
 bot.catch((err, ctx) => {
@@ -56,6 +61,10 @@ bot.command('security', handleSecurity);
 bot.command('unlock', handleUnlock);
 bot.command('lock', handleLock);
 
+// Limit order commands
+bot.command('limit', handleLimit);
+bot.command('orders', handleOrders);
+
 // Callback query handler (inline button presses)
 bot.on('callback_query', handleCallback);
 
@@ -68,6 +77,7 @@ const shutdown = async (signal: string) => {
   
   bot.stop(signal);
   stopSessionCleanup();
+  stopMonitoring();
   closeDatabase();
   
   process.exit(0);
@@ -81,6 +91,8 @@ console.log('Starting bot...');
 bot.launch()
   .then(() => {
     console.log('✅ Bot is running!');
+    console.log('Starting limit order monitoring...');
+    startMonitoring();
     console.log('Press Ctrl+C to stop.');
   })
   .catch((error) => {

@@ -3,12 +3,15 @@ import { Message } from 'telegraf/types';
 import { Network, TokenInfo, UserState } from '../types';
 import { config } from '../config';
 import * as db from '../services/database';
+import { logger } from '../utils/logger';
 import * as solana from '../services/solana';
 import * as base from '../services/base';
 import * as dexscreener from '../services/dexscreener';
 import * as keyboards from '../utils/keyboards';
 import * as formatters from '../utils/formatters';
 import { handleSecurityTextInput } from './security-handlers';
+import * as security from '../services/security';
+import { handleLimitTextInput } from './limit-order-handlers';
 
 // User states for conversation flow
 const userStates = new Map<number, UserState>();
@@ -35,7 +38,7 @@ export function clearUserState(userId: number): void {
 export async function handleStart(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
-  
+
   const welcomeMessage = `
 🚀 *Welcome to the Trading Bot\\!*
 
@@ -53,7 +56,7 @@ Trade tokens on *Solana* and *Base* networks directly from Telegram\\.
 
 ⚠️ *Security Reminder:* Your private keys are encrypted and stored locally\\. Never share your private key with anyone\\!
 `;
-  
+
   await ctx.reply(welcomeMessage, {
     parse_mode: 'MarkdownV2',
     ...keyboards.getMainMenuKeyboard(),
@@ -92,7 +95,7 @@ export async function handleHelp(ctx: Context): Promise<void> {
 • Start with small amounts
 • Always verify token addresses
 `;
-  
+
   await ctx.reply(helpMessage, {
     parse_mode: 'MarkdownV2',
     ...keyboards.getMainMenuKeyboard(),
@@ -170,9 +173,9 @@ export async function handleSettings(ctx: Context): Promise<void> {
 export async function handleHistory(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
-  
+
   const transactions = db.getRecentTransactions(userId, 10);
-  
+
   if (transactions.length === 0) {
     await ctx.reply('📜 *Transaction History*\n\nNo transactions yet.', {
       parse_mode: 'Markdown',
@@ -180,18 +183,18 @@ export async function handleHistory(ctx: Context): Promise<void> {
     });
     return;
   }
-  
+
   let message = '📜 *Recent Transactions*\n\n';
-  
+
   for (const tx of transactions) {
     const emoji = tx.action === 'buy' ? '🛒' : '💸';
     const network = tx.network === 'solana' ? '☀️' : '🔵';
     const date = new Date(tx.created_at).toLocaleDateString();
-    
+
     message += `${emoji} ${network} ${tx.action.toUpperCase()} ${tx.token_symbol || 'Token'}\n`;
     message += `   ${formatters.truncateAddress(tx.tx_hash)} | ${date}\n\n`;
   }
-  
+
   await ctx.reply(message, {
     parse_mode: 'Markdown',
     ...keyboards.getMainMenuKeyboard(),
@@ -204,16 +207,22 @@ export async function handleHistory(ctx: Context): Promise<void> {
 export async function handleTextMessage(ctx: Context): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
-  
+
   const message = ctx.message as Message.TextMessage;
   const text = message.text.trim();
-  
+
+  logger.info(`[MSG] user=${userId} text="${text.substring(0, 50)}"`);
+
   // Check if user is in a specific input state
   const state = getUserState(userId);
-  
-  
+
+
   // Handle security flows first
   if (await handleSecurityTextInput(ctx, text)) return;
+
+  // Handle limit order flows
+  if (await handleLimitTextInput(ctx, text)) return;
+
   // Handle withdraw flow text input
   if (state.currentAction === 'withdrawing' && state.pendingWithdraw) {
     await handleWithdrawTextInput(ctx, text);
@@ -237,23 +246,23 @@ export async function handleTextMessage(ctx: Context): Promise<void> {
     await handleWithdrawAmountInput(ctx, text);
     return;
   }
-  
+
   // Try to detect if this is a token address
   const network = formatters.detectNetworkFromAddress(text);
-  
+
   if (network) {
     // User pasted a token address
     await handleTokenAddressInput(ctx, text, network);
     return;
   }
-  
+
   // Check if it's a private key import (starts with a specific pattern)
   if (state.currentAction === 'settings') {
     // Handle private key import
     await handlePrivateKeyImport(ctx, text);
     return;
   }
-  
+
   // Unknown input
   await ctx.reply(
     '🤔 I didn\'t understand that. Please use the menu or paste a valid token contract address.',
@@ -351,17 +360,17 @@ async function handleWithdrawTextInput(ctx: Context, text: string): Promise<void
 }
 
 async function handleTokenAddressInput(
-  ctx: Context, 
-  address: string, 
+  ctx: Context,
+  address: string,
   network: Network
 ): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
-  
+
   await ctx.reply('🔍 Fetching token information...');
-  
+
   const tokenInfo = await dexscreener.getTokenInfo(address, network);
-  
+
   if (!tokenInfo) {
     await ctx.reply(
       '❌ Token not found or has no liquidity.\n\nPlease verify the address and try again.',
@@ -369,10 +378,10 @@ async function handleTokenAddressInput(
     );
     return;
   }
-  
+
   // Display token info
   const infoMessage = dexscreener.formatTokenInfoMessage(tokenInfo);
-  
+
   // Save pending trade state
   setUserState(userId, {
     currentAction: 'buying',
@@ -386,7 +395,7 @@ async function handleTokenAddressInput(
       stage: 'confirm_token',
     },
   });
-  
+
   await ctx.reply(
     infoMessage + '\n\n*Is this the correct token?*',
     {
@@ -402,23 +411,28 @@ async function handleTokenAddressInput(
 async function handleCustomBuyAmount(ctx: Context, amountStr: string): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
-  
+
+  logger.info(`[CUSTOM_BUY] user=${userId} input="${amountStr}"`);
+
   const state = getUserState(userId);
   const trade = state.pendingTrade;
-  
+
   if (!trade) {
+    logger.warn(`[CUSTOM_BUY] user=${userId} session expired`);
     await ctx.reply('Session expired. Please start again.', keyboards.getMainMenuKeyboard());
     clearUserState(userId);
     return;
   }
-  
+
   const amount = formatters.parseAmount(amountStr);
-  
+  logger.info(`[CUSTOM_BUY] user=${userId} parsed=${amount} from="${amountStr}"`);
+
   if (!amount || amount <= 0) {
+    logger.warn(`[CUSTOM_BUY] user=${userId} invalid amount: "${amountStr}" -> ${amount}`);
     await ctx.reply('❌ Invalid amount. Please enter a valid number (e.g., 0.5, 1.5, 100):');
     return;
   }
-  
+
   // Execute the buy
   await executeBuy(ctx, trade.network, trade.tokenAddress, amount);
 }
@@ -429,32 +443,32 @@ async function handleCustomBuyAmount(ctx: Context, amountStr: string): Promise<v
 async function handlePrivateKeyImport(ctx: Context, privateKey: string): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
-  
+
   const state = getUserState(userId);
   const network = state.selectedNetwork;
-  
+
   if (!network) {
     await ctx.reply('Please select a network first.', keyboards.getMainMenuKeyboard());
     clearUserState(userId);
     return;
   }
-  
+
   // Delete the message containing private key for security
   try {
     await ctx.deleteMessage();
   } catch (e) {
     // May fail if bot doesn't have delete permissions
   }
-  
+
   await ctx.reply('🔐 Importing wallet...');
-  
+
   let result;
   if (network === 'solana') {
     result = await solana.importSolanaWallet(userId, privateKey);
   } else {
     result = await base.importBaseWallet(userId, privateKey);
   }
-  
+
   if (result.success) {
     await ctx.reply(
       `✅ Wallet imported successfully!\n\n` +
@@ -471,7 +485,7 @@ async function handlePrivateKeyImport(ctx: Context, privateKey: string): Promise
       keyboards.getMainMenuKeyboard()
     );
   }
-  
+
   clearUserState(userId);
 }
 
@@ -486,7 +500,9 @@ export async function executeBuy(
 ): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
-  
+
+  logger.trade(`[BUY_START] user=${userId} network=${network} token=${tokenAddress} amount=${amount}`);
+
   // Check wallet exists
   const wallet = db.getWallet(userId, network);
   if (!wallet) {
@@ -496,12 +512,22 @@ export async function executeBuy(
     );
     return;
   }
-  
+
+  // Check if wallet is locked — prompt for password instead of failing
+  if (!security.isUnlocked(userId)) {
+    const state = getUserState(userId);
+    state.pendingBuyAfterUnlock = { network, tokenAddress, amount };
+    state.pendingUnlock = true;
+    logger.info(`[BUY] user=${userId} wallet locked, prompting for password`);
+    await ctx.reply('🔒 Wallet is locked. Enter your password to continue:');
+    return;
+  }
+
   const settings = db.getTradeSettings(userId, network);
   const nativeSymbol = network === 'solana' ? 'SOL' : 'ETH';
-  
+
   await ctx.reply(`⏳ Executing buy for ${amount} ${nativeSymbol}...`);
-  
+
   let result;
   if (network === 'solana') {
     result = await solana.buySolanaToken(
@@ -518,7 +544,8 @@ export async function executeBuy(
       settings.slippageBps
     );
   }
-  
+
+  logger.trade(`[BUY_RESULT] user=${userId} network=${network} success=${result.success} error=${result.error || ""}`);
   if (result.success) {
     // Record transaction
     db.recordTransaction(
@@ -531,7 +558,7 @@ export async function executeBuy(
       amount.toString(),
       '',
     );
-    
+
     await ctx.reply(
       `✅ *Buy Successful!*\n\n` +
       `💰 Spent: ${amount} ${nativeSymbol}\n` +
@@ -550,7 +577,7 @@ export async function executeBuy(
       }
     );
   }
-  
+
   clearUserState(userId);
 }
 
@@ -565,12 +592,12 @@ export async function executeSell(
 ): Promise<void> {
   const userId = ctx.from?.id;
   if (!userId) return;
-  
+
   const settings = db.getTradeSettings(userId, network);
   const nativeSymbol = network === 'solana' ? 'SOL' : 'ETH';
-  
+
   await ctx.reply(`⏳ Selling ${percentage}% of holdings...`);
-  
+
   let result;
   if (network === 'solana') {
     result = await solana.sellSolanaTokenPercentage(
@@ -587,7 +614,7 @@ export async function executeSell(
       settings.slippageBps
     );
   }
-  
+
   if (result.success) {
     // Record transaction
     db.recordTransaction(
@@ -600,7 +627,7 @@ export async function executeSell(
       percentage.toString(),
       '',
     );
-    
+
     await ctx.reply(
       `✅ *Sell Successful!*\n\n` +
       `💸 Sold: ${percentage}% of holdings\n` +
@@ -619,7 +646,7 @@ export async function executeSell(
       }
     );
   }
-  
+
   clearUserState(userId);
 }
 

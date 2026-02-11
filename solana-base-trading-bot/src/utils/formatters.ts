@@ -137,7 +137,7 @@ export function detectNetworkFromAddress(address: string): Network | null {
 export function parseAmount(amountStr: string): number | null {
   const cleaned = amountStr.toLowerCase().trim();
   
-  const match = cleaned.match(/^(\d+(?:\.\d+)?)(k|m|b)?$/);
+  const match = cleaned.match(/^(\d*\.?\d+)(k|m|b)?$/);
   if (!match) return null;
   
   let amount = parseFloat(match[1]);
